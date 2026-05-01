@@ -479,7 +479,7 @@ def generate_dataset_one_time_only(
         for domain in random.sample(real_benign_list, len(real_benign_list)):
             if real_written >= n_benign - n_benign_synthetic:
                 break
-            s = scheme_benign()                                  # ← FIXED
+            s = scheme_benign()
             variants = [
                 f"{s}{domain}/",
                 f"{s}{domain}/{random.choice(BENIGN_WORDS)}",
