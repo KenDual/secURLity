@@ -305,7 +305,7 @@ def gen_benign_cdn() -> str:
 
 
 def gen_benign_api() -> str:
-    s = scheme_benign()                                          # ← FIXED
+    s = scheme_benign()
     domain = random.choice(["google.com", "github.com", "microsoft.com"])
     version = f"v{random.randint(1,3)}"
     resources = ["users", "products", "orders", "posts", "metrics", "reports"]
@@ -314,7 +314,7 @@ def gen_benign_api() -> str:
 
 
 def gen_benign_news() -> str:
-    s = scheme_benign()                                          # ← FIXED
+    s = scheme_benign()
     domain = random.choice(NEWS_DOMAINS + ["medium.com"])
     year = random.randint(2018, 2024)
     month = str(random.randint(1, 12)).zfill(2)
@@ -323,20 +323,20 @@ def gen_benign_news() -> str:
 
 
 def gen_benign_shortlink() -> str:
-    s = scheme_benign()                                          # ← FIXED
+    s = scheme_benign()
     domain = random.choice(SHORTLINK_DOMAINS)
     code = rand_str(random.randint(4, 8), string.ascii_letters + string.digits)
     return f"{s}{domain}/{code}"
 
 
 def gen_benign_social() -> str:
-    s = scheme_benign()                                          # ← FIXED
+    s = scheme_benign()
     domain = random.choice(["twitter.com", "facebook.com", "instagram.com", "reddit.com"])
     return f"{s}{domain}/{rand_slug(1)}/{rand_digits(10)}"
 
 
 def gen_benign_subdomains(popular_domains: List[str]) -> str:
-    s = scheme_benign()                                          # ← FIXED
+    s = scheme_benign()
     domain = random.choice(popular_domains[:500])
     subdomain = random.choice(COMMON_SUBDOMAINS)
     path_choice = random.randint(0, 2)
@@ -354,7 +354,7 @@ def gen_benign_subdomains(popular_domains: List[str]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def gen_malicious_phishing() -> str:
-    s = scheme_malicious()                                       # ← FIXED
+    s = scheme_malicious()
     brand = random.choice(LEGIT_BRANDS)
     technique = random.randint(1, 3)
     if technique == 1:
@@ -385,20 +385,20 @@ def gen_malicious_ip_based() -> str:
 
 
 def gen_malicious_dga() -> str:
-    s = scheme_malicious()                                       # ← FIXED
+    s = scheme_malicious()
     domain = dga_domain()
     path = random.choice(C2_PATHS) if random.random() < 0.6 else ""
     return f"{s}{domain}{path}"
 
 
 def gen_malicious_drive_by() -> str:
-    s = scheme_malicious()                                       # ← FIXED
+    s = scheme_malicious()
     domain = rand_str(random.randint(5, 12)) + random.choice(MALICIOUS_TLDS)
     return f"{s}{domain}/ad/{rand_hex(4)}?{rand_hex(4)}={rand_hex(16)}"
 
 
 def gen_malicious_spam_scam() -> str:
-    s = scheme_malicious()                                       # ← FIXED
+    s = scheme_malicious()
     bait = random.choice(SCAM_BAIT)
     tld = random.choice(MALICIOUS_TLDS + [".com"])
     return f"{s}{bait}-{rand_str(4)}{tld}/claim?ref={rand_digits(8)}"

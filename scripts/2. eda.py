@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Constants derived from the generator (v3 FIXED)
+# Constants derived from the generator
 # ─────────────────────────────────────────────────────────────────────────────
 
 BENIGN_WORDS = [
