@@ -2,3 +2,5 @@ _venv_
 _pycache_
 *.pyc
 dataset/*
+data/processed/*
+models/*
