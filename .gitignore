@@ -4,3 +4,5 @@ _pycache_
 dataset/*
 data/processed/*
 models/*
+CLAUDE.md
+.claude

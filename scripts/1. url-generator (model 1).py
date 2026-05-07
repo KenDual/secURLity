@@ -54,7 +54,7 @@ def load_real_malicious_urls(filepath: str) -> Set[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PROTOCOL HELPERS  ← ONLY NEW CODE vs v3
+# PROTOCOL HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scheme_benign() -> str:

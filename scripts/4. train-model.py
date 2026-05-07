@@ -108,41 +108,6 @@ class CNNLSTM(nn.Module):
         # Classifier
         return self.fc(h).squeeze(1)
 
-# DataLoaders
-print("\nLoading datasets...")
-train_dataset = PreEncodedDataset(DATA_DIR / "train_X.npy", DATA_DIR / "train_y.npy")
-val_dataset = PreEncodedDataset(DATA_DIR / "val_X.npy", DATA_DIR / "val_y.npy")
-test_dataset = PreEncodedDataset(DATA_DIR / "test_X.npy", DATA_DIR / "test_y.npy")
-
-train_loader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-    num_workers=4, pin_memory=True, persistent_workers=True
-)
-val_loader = DataLoader(
-    val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=4, pin_memory=True, persistent_workers=True
-)
-test_loader = DataLoader(
-    test_dataset, batch_size=BATCH_SIZE, shuffle=False,
-    num_workers=4, pin_memory=True, persistent_workers=True
-)
-
-# Model setup
-model = CNNLSTM(
-    vocab_size=meta['vocab_size'],
-    embed_dim=EMBED_DIM,
-    conv_channels=CONV_CHANNELS,
-    lstm_hidden=LSTM_HIDDEN,
-    dropout=DROPOUT
-).to(device)
-
-# Loss with pos_weight for imbalanced data
-pos_weight = torch.tensor([meta['pos_weight']]).to(device)
-criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-# Optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-
 # Training function
 def train_epoch(model, loader, optimizer, criterion):
     model.train()
@@ -175,6 +140,36 @@ def evaluate(model, loader):
 
 # === MAIN EXECUTION - Must be wrapped for Windows ===
 if __name__ == '__main__':
+    # Dataset & DataLoaders
+    print("\nLoading datasets...")
+    train_dataset = PreEncodedDataset(DATA_DIR / "train_X.npy", DATA_DIR / "train_y.npy")
+    val_dataset = PreEncodedDataset(DATA_DIR / "val_X.npy", DATA_DIR / "val_y.npy")
+    test_dataset = PreEncodedDataset(DATA_DIR / "test_X.npy", DATA_DIR / "test_y.npy")
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=4, pin_memory=True, persistent_workers=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=4, pin_memory=True, persistent_workers=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=4, pin_memory=True, persistent_workers=True
+    )
+
+    # Model, loss, optimizer
+    model = CNNLSTM(
+        vocab_size=meta['vocab_size'],
+        embed_dim=EMBED_DIM,
+        conv_channels=CONV_CHANNELS,
+        lstm_hidden=LSTM_HIDDEN,
+        dropout=DROPOUT
+    ).to(device)
+    pos_weight = torch.tensor([meta['pos_weight']]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     
     # Training loop
     print("\n" + "="*70)
