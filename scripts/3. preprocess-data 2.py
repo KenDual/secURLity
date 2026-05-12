@@ -1,7 +1,17 @@
 """
-Preprocess URLs: Split data + Encode to numpy arrays
-Run this ONCE before training.
-Expected time: ~5 minutes for 10M URLs
+Preprocess URLs (model 2): Split data + Encode to numpy arrays
+Run this ONCE before training the CNN-LSTM on dataset 2.
+
+Input  : dataset/dataset 2.csv (10M rows, 7M benign + 3M malicious)
+Output : data/processed/model_2/
+
+MAX_LEN = 100 (giống model 1)
+  EDA (eda-result 2.txt) cho thấy:
+    - Overall P99 (sample) = 100
+    - Label 0: P99 = 102, max = 143
+    - Label 1: P99 = 100, max = 100
+  Với MAX_LEN=100, ~1% URL Label 0 sẽ bị truncate phần cuối — chấp nhận
+  được để đồng bộ với model 1 và giữ tốc độ training.
 """
 
 import string
@@ -14,17 +24,20 @@ import json
 
 # Paths
 PROJECT_ROOT = Path(r"D:\! secURLity")
-DATASET_PATH = PROJECT_ROOT / "dataset" / "urls_synthetic_10m.csv"
-OUTPUT_DIR = PROJECT_ROOT / "data" / "processed"
+DATASET_PATH = PROJECT_ROOT / "dataset" / "dataset 2.csv"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "processed" / "model_2"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Hyperparameters
-MAX_LEN = 100  # EDA shows P99=83, so 100 is enough
+MAX_LEN = 100  # EDA: P99=100 (overall sample); Label 0 P99=102 → cắt ~1%
 SEED = 42
 
 print("=" * 70)
-print("PREPROCESSING PIPELINE")
+print("PREPROCESSING PIPELINE (model 2)")
 print("=" * 70)
+print(f"Input  : {DATASET_PATH}")
+print(f"Output : {OUTPUT_DIR}")
+print(f"MAX_LEN: {MAX_LEN}")
 
 # Step 1: Load & Clean
 print("\n[1/5] Loading dataset...")
@@ -77,14 +90,14 @@ def encode_batch(urls, vocab, max_len):
     """Vectorized encoding (faster than loop)"""
     unk_idx = vocab['<UNK>']
     pad_idx = vocab['<PAD>']
-    
+
     encoded = np.full((len(urls), max_len), pad_idx, dtype=np.int32)
-    
+
     for i, url in enumerate(urls):
         url_truncated = url[:max_len]
         for j, char in enumerate(url_truncated):
             encoded[i, j] = vocab.get(char, unk_idx)
-    
+
     return encoded
 
 print("\n[4/5] Encoding URLs to numpy arrays...")
@@ -92,13 +105,13 @@ print("\n[4/5] Encoding URLs to numpy arrays...")
 # Encode each split
 for name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
     print(f"   Encoding {name} set ({len(split_df):,} URLs)...")
-    
+
     X = encode_batch(split_df['url'].tolist(), vocab, MAX_LEN)
     y = split_df['label'].values.astype(np.int32)
-    
+
     np.save(OUTPUT_DIR / f"{name}_X.npy", X)
     np.save(OUTPUT_DIR / f"{name}_y.npy", y)
-    
+
     print(f"   ✓ Saved {name}_X.npy shape: {X.shape}")
 
 # Step 5: Save metadata
@@ -124,4 +137,4 @@ print("\n" + "=" * 70)
 print("PREPROCESSING COMPLETE!")
 print("=" * 70)
 print(f"\nFiles saved to: {OUTPUT_DIR}")
-print("\nNext step: Run train_fast.py")
+print("\nNext step: Run train-model script trỏ vào data/processed/model_2/")
