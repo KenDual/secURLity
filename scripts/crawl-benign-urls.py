@@ -1,5 +1,5 @@
 """
-Crawl Vietnamese-targeted URLs for a real-world CNN-LSTM training dataset.
+Crawl INTERNATIONAL benign URLs for a real-world CNN-LSTM training dataset.
 
 Pipeline (mỗi seed):
   1. crt.sh         -> enumerate subdomain qua Certificate Transparency logs.
@@ -10,14 +10,19 @@ Pipeline (mỗi seed):
                        chỉ follow link cùng eTLD+1 với seed.
 
 Output:
-  dataset/vn-crawl/urls.csv    : url, seed, source(sitemap|crawl|crtsh_root), depth
-  dataset/vn-crawl/log.txt     : per-seed summary
+  dataset/intl-benign/urls.csv : url, seed, source(sitemap|crawl|crtsh_root), depth
+  dataset/intl-benign/log.txt  : per-seed summary
+
+Tốc độ: chạy song song nhiều seed cùng lúc qua ThreadPoolExecutor
+(--workers, default 8). Per-host rate-limit vẫn được tôn trọng (mỗi seed có
+host riêng nên không chặn nhau).
 
 Usage:
   pip install requests beautifulsoup4 tldextract tqdm
-  python "scripts/crawl-vn-urls.py"
-  python "scripts/crawl-vn-urls.py" --seeds dataset/vn-crawl/seeds.txt --max-per-host 2000
-  python "scripts/crawl-vn-urls.py" --no-crtsh --no-crawler   # chỉ sitemap
+  python "scripts/crawl-benign-urls.py"
+  python "scripts/crawl-benign-urls.py" --seeds dataset/intl-benign/seeds.txt --max-per-host 2000
+  python "scripts/crawl-benign-urls.py" --workers 16              # tăng song song
+  python "scripts/crawl-benign-urls.py" --no-crtsh --no-crawler   # chỉ sitemap
 """
 
 import argparse
@@ -25,10 +30,12 @@ import csv
 import gzip
 import re
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.robotparser
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -40,12 +47,13 @@ from tqdm import tqdm
 # Config
 # ============================================================================
 PROJECT_ROOT = Path(r"D:\! secURLity")
-OUT_DIR = PROJECT_ROOT / "dataset" / "vn-crawl"
+OUT_DIR = PROJECT_ROOT / "dataset" / "intl-benign"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_SEEDS = OUT_DIR / "seeds.txt"
 DEFAULT_OUTPUT = OUT_DIR / "urls.csv"
 DEFAULT_LOG = OUT_DIR / "log.txt"
 DEFAULT_PROCESSED_SEEDS = OUT_DIR / "processed_seeds.txt"
+DEFAULT_WORKERS = 8
 
 USER_AGENT = (
     "secURLityResearchCrawler/0.1 "
@@ -69,9 +77,18 @@ LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
 _tld = tldextract.TLDExtract(suffix_list_urls=(), fallback_to_snapshot=True, cache_dir=False)
 
 session = requests.Session()
+# Pool đủ lớn cho 8-16 worker dùng chung session (urllib3 default = 10 / host
+# → tăng lên 32 để tránh "Connection pool is full" warning).
+_adapter = requests.adapters.HTTPAdapter(pool_connections=64, pool_maxsize=64)
+session.mount("https://", _adapter)
+session.mount("http://", _adapter)
 session.headers.update({"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"})
 
 _last_request_time: dict[str, float] = {}
+_rate_lock = threading.Lock()        # bảo vệ _last_request_time
+_csv_lock = threading.Lock()         # bảo vệ writer + out_f.flush
+_seen_lock = threading.Lock()        # bảo vệ global_seen
+_processed_lock = threading.Lock()   # bảo vệ processed_f + processed_seeds set
 
 
 # ============================================================================
@@ -118,16 +135,26 @@ def normalize_url(url: str, base: str | None = None) -> str | None:
 # Politeness layer
 # ============================================================================
 def polite_get(url: str) -> requests.Response | None:
-    """GET với per-host rate limit. Trả None nếu request fail."""
+    """GET với per-host rate limit. Trả None nếu request fail.
+
+    Thread-safe: _last_request_time được bảo vệ bằng _rate_lock. Khi nhiều
+    worker chạm cùng 1 host, chúng sẽ tự xếp hàng (mỗi worker chờ đúng phần
+    còn lại của PER_HOST_DELAY rồi chiếm slot tiếp theo).
+    """
     try:
         host = urllib.parse.urlparse(url).hostname or ""
     except Exception:
         return None
-    last = _last_request_time.get(host, 0.0)
-    wait = PER_HOST_DELAY - (time.time() - last)
+    with _rate_lock:
+        last = _last_request_time.get(host, 0.0)
+        wait = PER_HOST_DELAY - (time.time() - last)
+        # Pre-claim slot: ghi nhận thời điểm dự kiến gửi request để worker
+        # khác cùng host phải chờ tiếp PER_HOST_DELAY sau đó (không kẹt lock
+        # trong khi sleep).
+        scheduled = max(time.time(), last + PER_HOST_DELAY)
+        _last_request_time[host] = scheduled
     if wait > 0:
         time.sleep(wait)
-    _last_request_time[host] = time.time()
     try:
         return session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
     except requests.RequestException:
@@ -135,14 +162,25 @@ def polite_get(url: str) -> requests.Response | None:
 
 
 class RobotsCache:
-    """Cache RobotFileParser per (scheme, netloc)."""
+    """Cache RobotFileParser per (scheme, netloc). Thread-safe."""
 
     def __init__(self):
         self.cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._cache_lock = threading.Lock()
+        # Per-key lock để tránh hai worker cùng tải robots.txt của cùng 1 host
+        self._key_locks: dict[str, threading.Lock] = {}
 
     def _key(self, url: str) -> str:
         p = urllib.parse.urlparse(url)
         return f"{p.scheme}://{p.netloc}"
+
+    def _get_key_lock(self, key: str) -> threading.Lock:
+        with self._cache_lock:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._key_locks[key] = lock
+            return lock
 
     def _load(self, key: str) -> urllib.robotparser.RobotFileParser | None:
         rp = urllib.robotparser.RobotFileParser()
@@ -156,11 +194,23 @@ class RobotsCache:
             pass
         return None
 
+    def _ensure_loaded(self, key: str) -> urllib.robotparser.RobotFileParser | None:
+        with self._cache_lock:
+            if key in self.cache:
+                return self.cache[key]
+        # Load ngoài lock — chỉ 1 worker / key thực sự fetch nhờ key_lock.
+        key_lock = self._get_key_lock(key)
+        with key_lock:
+            with self._cache_lock:
+                if key in self.cache:
+                    return self.cache[key]
+            rp = self._load(key)
+            with self._cache_lock:
+                self.cache[key] = rp
+            return rp
+
     def is_allowed(self, url: str) -> bool:
-        key = self._key(url)
-        if key not in self.cache:
-            self.cache[key] = self._load(key)
-        rp = self.cache[key]
+        rp = self._ensure_loaded(self._key(url))
         if rp is None:
             return True  # No robots.txt -> default allow
         try:
@@ -169,10 +219,7 @@ class RobotsCache:
             return True
 
     def sitemap_urls(self, key_url: str) -> list[str]:
-        key = self._key(key_url)
-        if key not in self.cache:
-            self.cache[key] = self._load(key)
-        rp = self.cache[key]
+        rp = self._ensure_loaded(self._key(key_url))
         if rp is None:
             return []
         try:
@@ -342,11 +389,13 @@ def crawl_bfs(
 def process_seed(
     seed_url: str,
     writer: "csv.writer",
+    out_f,
     global_seen: set[str],
     robots: RobotsCache,
     args,
 ) -> dict:
-    """Trả dict summary cho log."""
+    """Trả dict summary cho log. Thread-safe: ghi CSV + cập nhật global_seen
+    qua lock; chỉ phần I/O mạng (sitemap fetch, crawler) chạy không lock."""
     parsed = urllib.parse.urlparse(seed_url if "://" in seed_url else f"https://{seed_url}")
     root_host = (parsed.hostname or "").lower()
     if not root_host:
@@ -361,6 +410,21 @@ def process_seed(
         "crawl_urls": 0,
         "new_urls_written": 0,
     }
+
+    def _commit(urls_iter, source: str, depth: int) -> int:
+        """Atomically dedupe + ghi batch URL. Trả số dòng mới."""
+        rows: list[list] = []
+        with _seen_lock:
+            for u in urls_iter:
+                if u not in global_seen:
+                    global_seen.add(u)
+                    rows.append([u, seed_url, source, depth])
+        if not rows:
+            return 0
+        with _csv_lock:
+            writer.writerows(rows)
+            out_f.flush()
+        return len(rows)
 
     # 1. crt.sh
     subdomains: set[str] = set()
@@ -383,12 +447,7 @@ def process_seed(
         except Exception:
             pass
         summary["sitemap_urls"] += len(sitemap_urls)
-
-        for u in sitemap_urls:
-            if u not in global_seen:
-                global_seen.add(u)
-                summary["new_urls_written"] += 1
-                writer.writerow([u, seed_url, "sitemap", 0])
+        summary["new_urls_written"] += _commit(sitemap_urls, "sitemap", 0)
 
         # ---- Crawler fallback ----
         if args.crawler and len(sitemap_urls) < args.crawl_threshold:
@@ -405,11 +464,7 @@ def process_seed(
                 crawled = set()
             new_crawl = crawled - sitemap_urls
             summary["crawl_urls"] += len(new_crawl)
-            for u in new_crawl:
-                if u not in global_seen:
-                    global_seen.add(u)
-                    summary["new_urls_written"] += 1
-                    writer.writerow([u, seed_url, "crawl", -1])
+            summary["new_urls_written"] += _commit(new_crawl, "crawl", -1)
 
     return summary
 
@@ -418,7 +473,7 @@ def process_seed(
 # Main
 # ============================================================================
 def parse_args():
-    p = argparse.ArgumentParser(description="Crawl Vietnamese URLs for CNN-LSTM training.")
+    p = argparse.ArgumentParser(description="Crawl international benign URLs for CNN-LSTM training.")
     p.add_argument("--seeds", type=Path, default=DEFAULT_SEEDS,
                    help=f"File list seed (default: {DEFAULT_SEEDS})")
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
@@ -446,6 +501,9 @@ def parse_args():
                         "nếu file chưa tồn tại. Implies --append.")
     p.add_argument("--processed-seeds", type=Path, default=DEFAULT_PROCESSED_SEEDS,
                    help=f"File track seed đã xử lý (default: {DEFAULT_PROCESSED_SEEDS})")
+    p.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
+                   help=f"Số seed chạy song song. Default {DEFAULT_WORKERS}. "
+                        f"Per-host rate limit vẫn được giữ.")
     return p.parse_args()
 
 
@@ -524,7 +582,7 @@ def main():
         sys.exit(f"No seeds found in {args.seeds}")
 
     print("=" * 78)
-    print("VN URL CRAWLER")
+    print("INTERNATIONAL BENIGN URL CRAWLER")
     print("=" * 78)
     print(f"Seeds          : {args.seeds}  ({len(seeds)} seeds)")
     print(f"Output         : {args.output}  (mode={'append' if args.append else 'overwrite'})")
@@ -534,6 +592,7 @@ def main():
           f"(threshold={args.crawl_threshold}, depth={args.max_depth}, "
           f"max/host={args.max_per_host}, max_pages={args.max_pages})")
     print(f"Per-host delay : {PER_HOST_DELAY}s")
+    print(f"Workers        : {args.workers}  (seed chạy song song)")
     print("=" * 78)
 
     # ---- Resume state ----
@@ -561,34 +620,45 @@ def main():
         # File state để append seed đã xong (mở persistent ở mode append)
         processed_f = open(args.processed_seeds, "a", encoding="utf-8")
 
-        summaries = []
-        try:
-            for seed in tqdm(seeds, desc="seeds", unit="seed"):
-                if seed in processed_seeds:
-                    tqdm.write(f"  SKIP (done): {seed}")
-                    continue
-                try:
-                    summary = process_seed(seed, writer, global_seen, robots, args)
-                except KeyboardInterrupt:
-                    print("\nInterrupted — flushing partial output...")
-                    break
-                except Exception as e:
-                    summary = {"seed": seed, "error": str(e)}
-                summaries.append(summary)
-                out_f.flush()
-                tqdm.write(
-                    f"  {seed}  subs={summary.get('subdomains_found', 0)}  "
-                    f"sitemap={summary.get('sitemap_urls', 0)}  "
-                    f"crawl={summary.get('crawl_urls', 0)}  "
-                    f"new={summary.get('new_urls_written', 0)}"
-                )
+        # Filter seed cần làm
+        pending_seeds = [s for s in seeds if s not in processed_seeds]
+        skipped = len(seeds) - len(pending_seeds)
+        if skipped:
+            print(f"[resume] Skip {skipped} seed đã xử lý.")
 
-                # Đánh dấu seed đã xong (chỉ khi không có error → crash giữa
-                # chừng sẽ retry seed đó ở lần resume tới)
-                if "error" not in summary:
-                    processed_f.write(seed + "\n")
-                    processed_f.flush()
-                    processed_seeds.add(seed)
+        summaries: list[dict] = []
+        try:
+            with ThreadPoolExecutor(max_workers=args.workers) as ex:
+                future_to_seed = {
+                    ex.submit(process_seed, seed, writer, out_f, global_seen, robots, args): seed
+                    for seed in pending_seeds
+                }
+                with tqdm(total=len(pending_seeds), desc="seeds", unit="seed") as pbar:
+                    for fut in as_completed(future_to_seed):
+                        seed = future_to_seed[fut]
+                        try:
+                            summary = fut.result()
+                        except KeyboardInterrupt:
+                            print("\nInterrupted — cancelling remaining seeds...")
+                            for f in future_to_seed:
+                                f.cancel()
+                            break
+                        except Exception as e:
+                            summary = {"seed": seed, "error": str(e)}
+                        summaries.append(summary)
+                        tqdm.write(
+                            f"  {seed}  subs={summary.get('subdomains_found', 0)}  "
+                            f"sitemap={summary.get('sitemap_urls', 0)}  "
+                            f"crawl={summary.get('crawl_urls', 0)}  "
+                            f"new={summary.get('new_urls_written', 0)}"
+                        )
+                        # Đánh dấu seed đã xong (chỉ khi không có error)
+                        if "error" not in summary:
+                            with _processed_lock:
+                                processed_f.write(seed + "\n")
+                                processed_f.flush()
+                                processed_seeds.add(seed)
+                        pbar.update(1)
         finally:
             processed_f.close()
 
