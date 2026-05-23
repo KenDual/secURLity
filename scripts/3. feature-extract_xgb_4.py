@@ -1,27 +1,37 @@
 """
-Feature Extraction for XGBoost (model 2).
+Feature Extraction for XGBoost (model 4 — real-world dataset 19.68M URLs).
 
-Đọc các split đã được tạo bởi `3. preprocess-data 2.py`
-(`data/processed/model_2/{train,val,test}.csv`) và trích xuất feature vector
-cho từng URL. Lưu kết quả ra:
-    data/processed/xgboost/{train,val,test}_X_xgb.npy   (float32, (N, F))
-    data/processed/xgboost/{train,val,test}_y_xgb.npy   (int8,    (N,))
-    data/processed/xgboost/xgb_feature_cols.json        (tên cột)
-    data/processed/xgboost/xgb_feature_meta.json        (tld list, pos_weight)
+Đọc các split flat đã được tạo bởi `3. preprocess-data 4.py` ở chế độ random:
+    data/processed/model_4/random/{train,val,test}/split.csv     # url,label QUOTE_ALL
 
-Tinh thần feature engineering:
-  - Tính theo bản chất generic (entropy, digit/vowel ratio, longest run,...)
-    thay vì hardcode tín hiệu Char-RNN cụ thể của dataset này. Mục tiêu là
-    feature có ý nghĩa real-world chứ không chỉ memorization dataset.
-  - Không dùng known domain pools (ecommerce/news/tech_saas/...) làm feature —
-    đó là pure memorization của benign generator.
-  - Brand mention tách 2 góc: brand_in_registered_domain (benign signal) vs
-    brand_in_path_or_sub_only (phishing signal).
-  - TLD: top-50 one-hot + tld_other + tld_missing.
+Trích xuất feature vector mỗi URL → lưu ra:
+    data/processed/xgboost_4/{train,val,test}_X_xgb.npy   # float32 (N, F)
+    data/processed/xgboost_4/{train,val,test}_y_xgb.npy   # int8   (N,)
+    data/processed/xgboost_4/xgb_4_feature_cols.json      # tên cột (deterministic)
+    data/processed/xgboost_4/xgb_4_feature_meta.json      # TLD lists, pos_weight, notes
 
-Yêu cầu: `pip install tldextract xgboost` (đã ghi trong checklist mục 0).
+Khác biệt so với phiên bản cũ (model 2 / synthetic):
+  1. SPLITS_DIR đổi sang model_4/random, output sang xgboost_4.
+  2. Bỏ SCAM_BAIT/C2_PATHS/BRANDS/BENIGN_WORDS — đó là dấu vết của synthetic
+     generator (model 2). Trên real-world threat-feed URLs, các pool này gần
+     như zero-hit cho cả 2 label → noise.
+  3. SUSPICIOUS_KEYWORDS tỉa lại theo phishing thật (login/verify/account/...).
+  4. TOP_TLDS rebuild từ EDA 4 — gộp benign-heavy (.vn, .gov.uk, .com.vn, .fm,
+     .ie, .int) và mal-heavy (.app, .dev, .stream, .click, .sbs, .cfd, .icu,
+     .digital, .online, .shop, .live, .xyz, .top).
+  5. Thêm aggregate TLD buckets `tld_is_vn / _suspicious / _common` — EDA cho
+     thấy .vn TLD = 19.85% benign vs 0.18% mal (signal cực mạnh).
+  6. Thêm case features (mixed_case_ratio, has_upper) — EDA: benign 11.83%
+     mixed-case vs mal 5.50% (2.15× chênh).
+  7. Thêm charset anomalies (has_control_chars, non_ascii_ratio, has_punycode)
+     — EDA: 101 chars CHỈ xuất hiện trong mal đều là control bytes / "<>#"".
+  8. Thêm has_double_slash_in_path, path_to_url_ratio, is_bare_hostname (giúp
+     XGBoost xử lý bare-hostname FP issue mà model 4 CNN-LSTM gặp).
+
+Yêu cầu: `pip install tldextract xgboost`.
 """
 
+import csv
 import json
 import math
 import os
@@ -42,63 +52,57 @@ from tqdm import tqdm
 # Paths & parallelism
 # ============================================================================
 PROJECT_ROOT = Path(r"D:\! secURLity")
-SPLITS_DIR = PROJECT_ROOT / "data" / "processed" / "model_2"   # nguồn CSV splits
-OUT_DIR    = PROJECT_ROOT / "data" / "processed" / "xgboost"   # đầu ra .npy + JSON
+SPLITS_DIR = PROJECT_ROOT / "data" / "processed" / "model_4" / "random"
+OUT_DIR    = PROJECT_ROOT / "data" / "processed" / "xgboost_4"
 
-# Số worker process. Để cpu_count()-1, chừa 1 core cho main + OS.
 N_WORKERS = max(1, (os.cpu_count() or 2) - 1)
-# Số URL mỗi batch gửi sang worker. Đủ lớn để amortize IPC overhead,
-# đủ nhỏ để cân bằng tải khi chunk cuối lệch tiến độ.
 CHUNK_SIZE = 4000
 
 # ============================================================================
-# Word pools (đồng bộ với `scripts/2. eda 2.py`)
+# Word pools (tỉa lại từ phishing thực tế, không phải synthetic generator)
 # ============================================================================
-SUSPICIOUS_KEYWORDS = (
-    "login", "secure", "update", "confirm", "signin", "verify", "restore",
-    "alert", "validate", "verify-account", "authenticate", "urgent",
-    "limited", "security-alert", "warning",
+# Keyword phổ biến trong phishing kits / credential-harvest pages
+PHISHING_KEYWORDS = (
+    "login", "signin", "secure", "verify", "account", "password",
+    "bank", "wallet", "confirm", "auth", "session", "recover",
+    "unlock", "reset", "support", "billing",
 )
-SCAM_BAIT = (
-    "verify-account", "restore-access", "confirm-password",
-    "act-now", "update-payment",
-)
-BRANDS = (
-    "google", "amazon", "aws", "github", "paypal", "facebook", "azure",
-    "ubs", "linkedin", "gitlab", "dropbox", "twitter", "instagram",
-    "microsoft", "docker",
-)
-C2_PATHS = (
-    "/i", "/update", "/data", "/plugin", "/report", "/config",
-    "/gate", "/sync", "/cmd", "/c2",
-)
+
 MALWARE_EXTS = {".exe", ".apk", ".dmg", ".sh", ".scr", ".dll", ".bat", ".so", ".msi"}
 CDN_EXTS = {".js", ".json", ".css", ".xml", ".ts", ".jpg", ".yaml", ".gif",
             ".cjs", ".png", ".woff", ".woff2", ".svg", ".ico"}
-BENIGN_WORDS = {
-    "article", "tag", "search", "v1", "v2", "v3", "news", "docs", "releases",
-    "user", "comments", "posts", "api", "category", "files", "detail",
-    "product", "review", "cart", "order", "watch", "status", "blog",
-    "courses", "overview",
-}
 
-# Top 50 TLDs lấy từ eda-result 2.txt (label 0 + label 1 + một số TLD nghi vấn)
+# ============================================================================
+# TLD pools (rebuilt từ EDA 4 — real distribution của 19.68M URLs)
+# ============================================================================
+# Top 50 TLDs theo count trong dataset 4 (gộp cả benign-heavy + mal-heavy).
 TOP_TLDS = [
-    "com", "net", "org", "app", "io", "vn", "ly", "de", "co.uk", "edu",
-    "com.br", "ru", "com.au", "jp", "pl", "gd", "ac.uk", "it", "us",
-    "com.vn", "info", "site", "co", "top", "ga", "ml", "tk", "fr",
-    "tv", "fm", "social", "cloud", "so", "link", "cn", "uk", "in",
-    "me", "biz", "br", "es", "ca", "au", "ch", "nl", "se", "no",
-    "kr", "tr", "mx",
+    "com", "vn", "org", "co.uk", "net", "gov.uk", "com.vn", "gov", "ie", "fm",
+    "app", "it", "ru", "int", "dev", "org.vn", "stream", "io", "top", "click",
+    "de", "xyz", "info", "digital", "online", "ca", "sbs", "fr", "com.br", "co",
+    "shop", "tk", "icu", "uk", "cc", "cn", "site", "me", "pl", "id",
+    "in", "cfd", "us", "nl", "live", "com.au", "za", "club", "ar", "edu",
 ]
+
+# Aggregate buckets — capture signal beyond individual one-hot.
+VN_TLDS = {"vn", "com.vn", "org.vn", "gov.vn", "edu.vn", "net.vn", "ac.vn"}
+# TLD rẻ / mới / phổ biến trong threat feeds (EDA 4: chiếm tỉ lệ lớn ở label=1)
+SUSPICIOUS_TLDS = {
+    "top", "xyz", "click", "sbs", "cfd", "icu", "stream", "digital",
+    "online", "shop", "live", "tk", "ml", "ga", "gd", "site", "club",
+    "fit", "rest", "loan", "men", "review", "trade",
+}
+# Baseline benign / institutional
+COMMON_TLDS = {"com", "org", "net", "edu", "gov"}
 
 VOWELS = set("aeiou")
 CONSONANTS = set(string.ascii_lowercase) - VOWELS
 DIGITS_SET = set(string.digits)
 IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 SPLIT_RE = re.compile(r"[/_\-.]")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-# Use bundled PSL snapshot only (no online fetch each run)
+# Bundled PSL snapshot only (no online fetch)
 _tld_extractor = tldextract.TLDExtract(
     suffix_list_urls=(), fallback_to_snapshot=True, cache_dir=False
 )
@@ -146,8 +150,21 @@ def n_query_params(query: str) -> int:
 # ============================================================================
 # Feature extraction (returns dict — first row sets column order)
 # ============================================================================
-def extract_features(url: str) -> dict:
-    url = (url or "").strip().lower()
+def extract_features(url_raw: str) -> dict:
+    url_raw = (url_raw or "").strip()
+
+    # ---- Case-sensitive / charset metrics MUST be computed before lower() ----
+    ascii_letters = [c for c in url_raw if c.isalpha() and ord(c) < 128]
+    n_upper = sum(1 for c in ascii_letters if c.isupper())
+    mixed_case_ratio = n_upper / max(len(ascii_letters), 1)
+    has_upper = int(n_upper > 0)
+    has_control_chars = int(bool(CONTROL_RE.search(url_raw)))
+    n_non_ascii = sum(1 for c in url_raw if ord(c) > 127)
+    non_ascii_ratio = n_non_ascii / max(len(url_raw), 1)
+    has_non_ascii = int(n_non_ascii > 0)
+
+    # Lowercase for parsing & token-matching
+    url = url_raw.lower()
     parsed = safe_parse(url)
     scheme = parsed.scheme if parsed else ""
     host = (parsed.hostname or "") if parsed else ""
@@ -161,13 +178,12 @@ def extract_features(url: str) -> dict:
 
     ext = _tld_extractor(url) if url else None
     suffix = ext.suffix if ext else ""
-    registered = ext.domain if ext else ""  # phần "google" trong google.com
     subdomain = ext.subdomain if ext else ""
 
     feats: dict = {}
 
     # ---- Structural ----
-    feats["url_len"] = len(url)
+    feats["url_len"] = len(url_raw)
     feats["host_len"] = len(host)
     feats["path_len"] = len(path)
     feats["query_len"] = len(query)
@@ -177,6 +193,10 @@ def extract_features(url: str) -> dict:
     feats["has_query"] = int(bool(query))
     feats["has_fragment"] = int(bool(fragment))
     feats["has_port"] = int(port is not None)
+    feats["path_to_url_ratio"] = len(path) / max(len(url_raw), 1)
+    # Bare-hostname flag — giúp model xử lý FP trên URL như "https://google.com"
+    # (model 4 CNN-LSTM bị bug này, doc trong CLAUDE.md mục Known issues #6)
+    feats["is_bare_hostname"] = int(path in ("", "/"))
 
     # ---- Char composition (whole URL) ----
     digit_count = sum(c.isdigit() for c in url)
@@ -189,6 +209,17 @@ def extract_features(url: str) -> dict:
     feats["amp_count"] = url.count("&")
     feats["eq_count"] = url.count("=")
     feats["qmark_count"] = url.count("?")
+    feats["has_double_slash_in_path"] = int("//" in path)
+
+    # ---- Case (raw, before lower) ----
+    feats["mixed_case_ratio"] = mixed_case_ratio
+    feats["has_upper"] = has_upper
+
+    # ---- Charset anomalies ----
+    feats["has_control_chars"] = has_control_chars
+    feats["has_non_ascii"] = has_non_ascii
+    feats["non_ascii_ratio"] = non_ascii_ratio
+    feats["has_punycode"] = int("xn--" in host)
 
     # ---- Host-specific ----
     host_digits = sum(c.isdigit() for c in host)
@@ -203,7 +234,6 @@ def extract_features(url: str) -> dict:
     feats["host_longest_digit_run"] = longest_run(host, DIGITS_SET)
     feats["host_longest_consonant_run"] = longest_run(host, CONSONANTS)
 
-    # Vowel ratio trên ký tự alphabet của host (capture DGA/Char-RNN gibberish)
     host_letters = [c for c in host if c.isalpha()]
     feats["host_vowel_ratio"] = (
         sum(c in VOWELS for c in host_letters) / len(host_letters)
@@ -221,7 +251,7 @@ def extract_features(url: str) -> dict:
     feats["is_https"] = int(scheme == "https")
     feats["is_ip_host"] = int(bool(IP_RE.match(host)))
 
-    # ---- TLD one-hot ----
+    # ---- TLD one-hot (top 50) ----
     for tld in TOP_TLDS:
         key = "tld_" + tld.replace(".", "_")
         feats[key] = int(suffix == tld)
@@ -229,32 +259,18 @@ def extract_features(url: str) -> dict:
     feats["tld_missing"] = int(not suffix)
     feats["tld_label_count"] = suffix.count(".") + 1 if suffix else 0
 
-    # ---- Lexical heuristic flags ----
-    path_query = path + "?" + query  # search trên cả path lẫn query
+    # ---- TLD aggregate buckets (EDA 4 driven) ----
+    feats["tld_is_vn"] = int(suffix in VN_TLDS)
+    feats["tld_is_suspicious"] = int(suffix in SUSPICIOUS_TLDS)
+    feats["tld_is_common"] = int(suffix in COMMON_TLDS)
 
-    # Suspicious keywords
-    n_sus = sum(1 for kw in SUSPICIOUS_KEYWORDS if kw in path_query)
-    feats["num_suspicious_keywords"] = n_sus
-    feats["has_suspicious_keyword"] = int(n_sus > 0)
+    # ---- Phishing keyword hits ----
+    path_query = path + "?" + query
+    n_phish = sum(1 for kw in PHISHING_KEYWORDS if kw in path_query)
+    feats["num_phishing_keywords"] = n_phish
+    feats["has_phishing_keyword"] = int(n_phish > 0)
 
-    # Scam bait (phrase-level)
-    feats["has_scam_bait"] = int(any(b in url for b in SCAM_BAIT))
-
-    # C2-style path prefixes
-    n_c2 = 0
-    for p in C2_PATHS:
-        if path == p or path.startswith(p + "/") or path.startswith(p + "?"):
-            n_c2 += 1
-    feats["has_c2_path"] = int(n_c2 > 0)
-    feats["num_c2_path_hits"] = n_c2
-
-    # Brand mention — split 2 góc
-    brand_in_reg = any(b in registered for b in BRANDS)
-    brand_anywhere = any(b in url for b in BRANDS)
-    feats["brand_in_registered_domain"] = int(brand_in_reg)
-    feats["brand_in_path_or_sub_only"] = int(brand_anywhere and not brand_in_reg)
-
-    # File extension category — chỉ lấy extension của segment cuối path
+    # ---- File extension ----
     last_seg = path.rstrip("/").rsplit("/", 1)[-1] if path else ""
     if "." in last_seg:
         ext_str = "." + last_seg.rsplit(".", 1)[-1]
@@ -264,30 +280,18 @@ def extract_features(url: str) -> dict:
     feats["has_cdn_ext"] = int(ext_str in CDN_EXTS)
     feats["has_any_ext"] = int(bool(ext_str))
 
-    # Benign word hits (mâu thuẫn signal — giảm score nếu xuất hiện)
-    path_tokens = set(t for t in SPLIT_RE.split(path) if t)
-    bw_hits = path_tokens & BENIGN_WORDS
-    feats["num_benign_words"] = len(bw_hits)
-    feats["has_benign_word"] = int(bool(bw_hits))
-
     return feats
 
 
 # ============================================================================
-# Feature order — chốt 1 lần bằng cách extract một URL probe ở module level.
-# Worker process re-import module sẽ tự dựng lại cùng list (deterministic).
+# Feature order — chốt 1 lần qua probe URL (deterministic across workers)
 # ============================================================================
-_PROBE_URL = "https://www.example.com/path/to/file.html?a=1&b=2"
+_PROBE_URL = "https://www.Example.com/path/to/file.html?a=1&b=2"
 FEATURE_NAMES: list[str] = list(extract_features(_PROBE_URL).keys())
 N_FEATURES: int = len(FEATURE_NAMES)
 
 
 def _worker_batch(urls: list[str]) -> np.ndarray:
-    """Worker: trả về numpy array (len(urls), N_FEATURES) float32.
-
-    Trả numpy thay vì list[dict] để pickle nhanh + tiết kiệm RAM khi
-    main process gộp.
-    """
     out = np.empty((len(urls), N_FEATURES), dtype=np.float32)
     for i, u in enumerate(urls):
         feats = extract_features(u)
@@ -305,14 +309,28 @@ def _chunked(seq, size):
         yield chunk
 
 
+def _read_input_csv(csv_path: Path) -> pd.DataFrame:
+    """Read split.csv — QUOTE_ALL format from preprocess-data 4.py."""
+    with csv_path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        header = f.readline()
+    is_quoted = header.lstrip().startswith('"')
+    if is_quoted:
+        return pd.read_csv(
+            csv_path,
+            quotechar='"',
+            quoting=csv.QUOTE_ALL,
+            doublequote=True,
+        )
+    return pd.read_csv(csv_path)
+
+
 # ============================================================================
 # Driver (multiprocess)
 # ============================================================================
 def process_split(name: str, pool: Pool) -> None:
-    """Extract features for one split, using shared worker pool."""
-    csv_path = SPLITS_DIR / f"{name}.csv"
+    csv_path = SPLITS_DIR / name / "split.csv"
     print(f"\n[{name}] Loading {csv_path}...")
-    df = pd.read_csv(csv_path)
+    df = _read_input_csv(csv_path)
     df["url"] = df["url"].astype(str)
     n = len(df)
     print(f"  rows: {n:,}  | workers: {N_WORKERS}  | chunk: {CHUNK_SIZE}")
@@ -342,24 +360,24 @@ def process_split(name: str, pool: Pool) -> None:
 
 def main():
     print("=" * 78)
-    print("FEATURE EXTRACTION (XGBoost — model 2)")
+    print("FEATURE EXTRACTION (XGBoost — model 4, real-world 19.68M URLs)")
     print("=" * 78)
     print(f"Splits dir : {SPLITS_DIR}")
     print(f"Output dir : {OUT_DIR}")
     print(f"Features   : {N_FEATURES}")
     print(f"Workers    : {N_WORKERS}  | chunk size: {CHUNK_SIZE}")
 
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     with Pool(processes=N_WORKERS) as pool:
         for split in ("train", "val", "test"):
             process_split(split, pool)
 
-    # Save schema + meta
-    cols_path = OUT_DIR / "xgb_feature_cols.json"
+    cols_path = OUT_DIR / "xgb_4_feature_cols.json"
     with open(cols_path, "w", encoding="utf-8") as f:
         json.dump(FEATURE_NAMES, f, indent=2)
     print(f"\nSaved feature columns -> {cols_path}  ({N_FEATURES} cols)")
 
-    # Compute pos_weight từ train labels để khỏi recompute lúc train
     y_train = np.load(OUT_DIR / "train_y_xgb.npy")
     n_pos = int((y_train == 1).sum())
     n_neg = int((y_train == 0).sum())
@@ -368,15 +386,27 @@ def main():
     meta = {
         "n_features": N_FEATURES,
         "top_tlds": TOP_TLDS,
+        "vn_tlds": sorted(VN_TLDS),
+        "suspicious_tlds": sorted(SUSPICIOUS_TLDS),
+        "common_tlds": sorted(COMMON_TLDS),
+        "phishing_keywords": list(PHISHING_KEYWORDS),
+        "malware_exts": sorted(MALWARE_EXTS),
+        "cdn_exts": sorted(CDN_EXTS),
         "pos_weight": pos_weight,
         "train_label_counts": {"0": n_neg, "1": n_pos},
+        "source_splits": str(SPLITS_DIR),
         "notes": (
-            "Generic lexical / statistical features. KHÔNG dùng known-domain "
-            "pools làm feature. Tính chất Char-RNN artifact được bắt gián tiếp "
-            "qua entropy_host / host_vowel_ratio / host_longest_consonant_run."
+            "Feature set v2 cho XGBoost model 4 (real-world 19.68M URLs). "
+            "Loại bỏ SCAM_BAIT/C2_PATHS/BRANDS/BENIGN_WORDS (synthetic-era artifacts "
+            "từ model 2). Thêm: tld_is_vn / tld_is_suspicious / tld_is_common, "
+            "mixed_case_ratio, has_upper, has_control_chars, has_non_ascii, "
+            "non_ascii_ratio, has_punycode, has_double_slash_in_path, "
+            "path_to_url_ratio, is_bare_hostname. TOP_TLDS rebuilt from EDA 4. "
+            "Phishing keywords tỉa về real phishing kits. Pos_weight target ~4.0 "
+            "(dataset 80/20 benign/mal)."
         ),
     }
-    meta_path = OUT_DIR / "xgb_feature_meta.json"
+    meta_path = OUT_DIR / "xgb_4_feature_meta.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
     print(f"Saved meta            -> {meta_path}")

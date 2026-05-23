@@ -69,7 +69,7 @@
 - **Sản phẩm phần mềm**:  
   Ứng dụng web đánh giá rủi ro URL vận hành cục bộ, tích hợp hai model score độc lập và hiển thị kết quả SHAP trực quan.
 
-- **Tính minh bạch dữ liệu**:  
+- **Tính minh bạch dữ liệu**:
   SHAP TreeExplainer cho XGBoost cung cấp giải thích feature-level tức thì; SHAP DeepExplainer cho CNN-LSTM cung cấp giải thích character-level. Hai góc nhìn bổ sung lẫn nhau.
 
 - **Hiệu năng mô hình**:  
