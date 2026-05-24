@@ -1,0 +1,13 @@
+SGDClassifier_2.joblib
+
+--- Classification report ---
+              precision    recall  f1-score   support
+
+      benign     0.8150    0.9302    0.8688     91260
+       phish     0.9003    0.7491    0.8178     76800
+
+    accuracy                         0.8474    168060
+   macro avg     0.8577    0.8396    0.8433    168060
+weighted avg     0.8540    0.8474    0.8455    168060
+
+ROC-AUC: 0.9277
