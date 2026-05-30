@@ -6,6 +6,6 @@ data/processed/*
 .claude
 .CLAUDE.md
 .checklist.md
-.WEPPLAN.md
-.CNN-LSTMD.md
+.WEBAPP-PLAN.md
+.CNN-LSTM-final.md
 .PLAN.md
