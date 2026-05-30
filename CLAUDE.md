@@ -14,12 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | **XGBoost** | 105 tabular features từ URL | SHAP TreeExplainer (exact, sub-ms) | < 1 ms/URL (UBJ file) |
 | **SGDClassifier** | Raw HTML content (char 3-4 grams) | — | Cần fetch HTML page trước |
 
-**Ensemble** giữa 3 model: **chưa implement** (Phase 2). Hiện tại mỗi model chạy độc lập.
+**Ensemble** giữa 3 model (CNN-LSTM + XGBoost): **đã implement trong webapp** (simple average, threshold=0.5). SGD chỉ hiển thị tách biệt, không tham gia ensemble.
 
 **Reference docs:**
 - `PLAN.md` — Kiến trúc, ý tưởng, chiến lược tổng thể (đọc trước nếu mới vào dự án)
 - `checklist.md` — Technical checklist chi tiết + metrics thực tế
 - `CNN-LSTM-final.md` — Implementation log + decision history đầy đủ cho CNN-LSTM
+- `WEBAPP-PLAN.md` — Kế hoạch và checklist cho web app (FastAPI + HF Spaces deploy)
 
 ---
 
@@ -69,7 +70,7 @@ Do NOT confuse: SHAP is correct for XGBoost. SHAP was dropped for CNN-LSTM only 
 Classifies raw HTML page content using `HashingVectorizer` (char 3-4 grams, 2^20 features) + `SGDClassifier` trained on HuggingFace dataset `phreshphish/phreshphish`.
 
 **Test results**: accuracy = 0.8474 | ROC-AUC = 0.9277 | F1(phish) = 0.8178  
-**Model file**: `D:\phreshphish\models\SGDClassifier_2.joblib` (4.2 MB) — **different root than project**  
+**Model file**: `D:\! secURLity\models\SGDClassifier_2.joblib` (4.2 MB)  
 **Dataset local path**: `D:\phreshphish\data\` (parquet files, NOT in `D:\! secURLity\`)
 
 This model requires fetching the HTML page first; it complements URL-based models for content-level analysis.
@@ -169,7 +170,41 @@ D:\! secURLity\
 ├── checklist.md                             # Technical checklist + all metrics
 ├── CNN-LSTM-final.md                        # CNN-LSTM implementation log + decisions
 ├── CLAUDE.md                                # This file
+├── WEBAPP-PLAN.md                           # Web app plan + checklist (Phase A/B/C)
 ├── venv\                                    # Python 3.14 + PyTorch 2.11 + onnxruntime
+│
+├── webapp\                                  # FastAPI web app (Phase A+B complete)
+│   ├── Dockerfile                           # python:3.11-slim, port 7860 (HF Spaces)
+│   ├── requirements.txt                     # fastapi==0.115.6, starlette==0.41.2, pinned
+│   ├── .dockerignore
+│   ├── app\
+│   │   ├── main.py                          # FastAPI app + all routes
+│   │   ├── config.py                        # ENSEMBLE_THRESHOLD=0.5, paths, rate limit
+│   │   ├── schemas.py                       # Pydantic v2 request/response models
+│   │   ├── predict_service.py               # PredictService: CNN-LSTM ONNX + XGBoost + lazy SGD
+│   │   ├── ensemble.py                      # ensemble_average() = (cnn+xgb)/2
+│   │   ├── explain.py                       # build_attention_heatmap_html(), format_shap_topk()
+│   │   ├── html_fetch.py                    # async fetch_html() + SSRF guard
+│   │   ├── db.py                            # aiosqlite: init_db, insert_scan, get_recent
+│   │   ├── ratelimit.py                     # slowapi 10/min/IP
+│   │   ├── scripts\
+│   │   │   ├── lexical_features.py          # 30 CNN-LSTM lexical features (extracted from scripts/)
+│   │   │   └── xgb_features.py             # 105 XGBoost features (extracted from scripts/)
+│   │   └── templates\
+│   │       ├── base.html                    # Layout + Tailwind/HTMX/Alpine CDN
+│   │       ├── index.html                   # Main page: 2-col layout (form left, result right)
+│   │       ├── _result.html                 # HTMX partial: verdict cards + heatmap + SHAP
+│   │       └── history.html                 # Recent 50 scans table
+│   └── bundled_models\                      # Model artifacts copied here for Docker
+│       ├── cnn_lstm_4_domain.onnx           # từ ../models/
+│       ├── xgb_url_4.ubj                    # từ ../models/
+│       ├── thresholds_4.json                # từ ../models/
+│       ├── thresholds_xgb_4.json           # từ ../models/
+│       ├── vocab.json                       # từ ../data/processed/model_4/
+│       ├── metadata.json                    # từ ../data/processed/model_4/
+│       ├── feat_stats.json                  # từ ../data/processed/model_4/domain/
+│       ├── xgb_4_feature_cols.json         # từ ../data/processed/xgboost_4/
+│       └── SGDClassifier_2.joblib           # từ D:\! secURLity\models\
 │
 ├── dataset\
 │   ├── dataset-4-final.csv                  # 19.68M URLs (80/20, QUOTE_ALL)
@@ -350,7 +385,7 @@ All predict scripts output a 4-tier risk level from raw probability (independent
 
 7. **Domain split threshold coarse resolution**: `safer`/`precise` collapse at thr=0.98 because sweep step=0.01 is too coarse for [0.98, 0.99] range. Future improvement: sweep step=0.001 in that region.
 
-8. **SGDClassifier paths under different root**: `D:\phreshphish\` — don't confuse with `D:\! secURLity\`. Dataset (parquet), model (joblib), and cache are all under the phreshphish root.
+8. **SGDClassifier model path corrected**: Model file is at `D:\! secURLity\models\SGDClassifier_2.joblib` (NOT `D:\phreshphish\` as previously documented — the phreshphish dir does not exist). Training scripts still reference the old path if you ever re-train.
 
 ---
 
@@ -375,10 +410,48 @@ All predict scripts output a 4-tier risk level from raw probability (independent
 - Paths are under `D:\phreshphish\` — update both scripts if moved.
 - `partial_fit()` requires `classes=np.array([0, 1])` on every call.
 
-### Ensemble (Phase 2 — not yet implemented)
-- When implementing: load CNN-LSTM ONNX domain + XGBoost, combine probabilities.
-- SGDClassifier is optional path (requires HTML fetch, higher latency).
-- Tune ensemble weights on val set (not test set).
+### Ensemble (implemented in webapp)
+- CNN-LSTM ONNX domain + XGBoost run in parallel per request (`asyncio.gather` via `run_in_threadpool`).
+- Formula: `(cnn_prob + xgb_prob) / 2` — simple average, configurable threshold in `config.py`.
+- SGDClassifier is optional (toggle UI), NOT included in ensemble score.
+- If tuning weights: edit `ensemble_average()` in `webapp/app/ensemble.py`; tune on val set not test set.
+
+---
+
+## Webapp (Phase A + B — đã complete)
+
+**Tech stack**: FastAPI + Jinja2 + HTMX + Alpine.js + Tailwind CSS (via CDN). Port **7860** (HF Spaces default).
+
+**Cấu trúc** `webapp/`:
+- `app/main.py` — FastAPI app, routes (`/`, `/predict`, `/api/predict`, `/history`, `/health`, `/docs`)
+- `app/predict_service.py` — Load CNN-LSTM ONNX + XGBoost + lazy SGD; inference methods
+- `app/explain.py` — `build_attention_heatmap_html()`, `format_shap_topk()`
+- `app/html_fetch.py` — Async HTML fetcher với SSRF guard (IPv4+IPv6 private ranges, DNS check)
+- `app/ensemble.py` — `ensemble_average()` = `(cnn_prob + xgb_prob) / 2`
+- `app/db.py` — aiosqlite: init, insert_scan, get_recent
+- `app/config.py` — `ENSEMBLE_THRESHOLD = 0.5`, paths, rate limit
+- `app/templates/` — base.html, index.html (2-col layout), _result.html (HTMX partial), history.html
+- `bundled_models/` — Copy artifacts từ `models/` và `data/processed/` vào đây
+
+**Chạy local**:
+```powershell
+cd D:\! secURLity\webapp
+..\venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 7862
+```
+
+**Key decisions**:
+- CORS chỉ apply cho `/api/*` routes (không apply cho HTML routes) — custom middleware, không dùng CORSMiddleware global
+- Rate limit: 10 req/min/IP via slowapi, apply cả `/predict` form và `/api/predict`
+- SGD model lazy-load (chỉ load khi có request `enable_sgd=true`)
+- `/predict` POST → trả HTML partial (`_result.html`), HTMX swap vào `#result` div
+- `/api/predict` POST → trả JSON (developer API)
+- ENSEMBLE_THRESHOLD = 0.5 (user có thể chỉnh trong `config.py`)
+
+**Phase còn lại**: Phase C (optional) + HF Spaces deployment (xem WEBAPP-PLAN.md Section 8).
+
+**Known webapp issues**:
+- CNN-LSTM false positive trên bare hostname (`https://google.com`) vẫn xảy ra → ensemble prob ~50%, có thể vừa pass threshold 0.5. Không có fix — đây là model limitation.
+- Rate limit counter reset khi server restart (slowapi in-memory, không persistent).
 
 ---
 
@@ -401,4 +474,4 @@ Differ from current: `MAX_LEN=100`, `vocab_size=51`, no lexical features, no att
 | CNN-LSTM (random — reference) | 0.999926 | 0.999992 | 0.999969 | thr=0.42, in-distribution |
 | XGBoost | **0.999618** | 0.999999 | 0.999995 | thr=0.40, random split |
 | SGDClassifier (HTML) | 0.8178 (F1 phish) | 0.9277 | — | accuracy=0.847 |
-| **Ensemble** | TBD | TBD | TBD | Phase 2 — not implemented |
+| **Ensemble (webapp)** | — | — | — | simple avg CNN+XGBoost, thr=0.5, implemented in webapp |

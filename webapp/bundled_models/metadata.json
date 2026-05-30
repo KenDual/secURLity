@@ -1,0 +1,53 @@
+{
+  "max_len": 256,
+  "vocab_size": 94,
+  "pad_idx": 0,
+  "unk_idx": 1,
+  "seed": 42,
+  "split_ratios": [
+    0.8,
+    0.1,
+    0.1
+  ],
+  "source_csv": "D:\\! secURLity\\dataset\\dataset-4-final.csv",
+  "case_preserved": true,
+  "n_total": 19678135,
+  "modes": {
+    "random": {
+      "train": {
+        "count": 15742507,
+        "label_0": 12594006,
+        "label_1": 3148501
+      },
+      "val": {
+        "count": 1967812,
+        "label_0": 1574250,
+        "label_1": 393562
+      },
+      "test": {
+        "count": 1967816,
+        "label_0": 1574252,
+        "label_1": 393564
+      },
+      "pos_weight": 4.0
+    },
+    "domain": {
+      "train": {
+        "count": 15742509,
+        "label_0": 12592478,
+        "label_1": 3150031
+      },
+      "val": {
+        "count": 1967813,
+        "label_0": 1575202,
+        "label_1": 392611
+      },
+      "test": {
+        "count": 1967813,
+        "label_0": 1574828,
+        "label_1": 392985
+      },
+      "pos_weight": 3.9976
+    }
+  }
+}

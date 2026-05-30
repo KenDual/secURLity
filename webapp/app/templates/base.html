@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}secURLity — URL Malware Scanner{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: flex; }
+    .htmx-request.htmx-indicator { display: flex; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-full flex flex-col">
+
+  <header class="bg-gray-900 text-white shadow-lg">
+    <div class="max-w-5xl mx-auto px-4 py-4 flex items-center gap-3">
+      <span class="text-2xl select-none">🔒</span>
+      <a href="/" class="text-xl font-bold tracking-tight hover:text-blue-300 transition-colors">
+        secURLity
+      </a>
+      <span class="text-gray-500 text-xs ml-1">v1.0</span>
+      <nav class="ml-auto flex items-center gap-4 text-sm text-gray-400">
+        <a href="/history" class="hover:text-white transition-colors">History</a>
+        <a href="/how-it-works" class="hover:text-white transition-colors">How it works</a>
+        <a href="/api-guide" class="hover:text-white transition-colors">API</a>
+        <a href="https://github.com/kendual/securlity" target="_blank" class="hover:text-yellow-300 transition-colors">⭐ Star on GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="flex-1 max-w-5xl mx-auto w-full px-4 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="border-t border-gray-200 py-4 text-center text-xs text-gray-400">
+    Trained on 19.68M real-world URLs · CNN-LSTM + XGBoost ensemble ·
+    <a href="/api-guide" class="hover:text-gray-600">API</a> ·
+    <a href="/how-it-works" class="hover:text-gray-600">How it works</a>
+  </footer>
+
+</body>
+</html>

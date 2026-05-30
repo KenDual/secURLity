@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div
+  x-data="{ showSgdWarning: false, enableSgd: false }"
+  class="flex flex-col gap-6"
+>
+
+  <!-- ══ TOP: Form ══ -->
+  <div class="space-y-5">
+
+    <div>
+      <h1 class="text-3xl font-bold text-gray-800 mb-2">URL Malware Scanner</h1>
+      <p class="text-gray-500 text-sm leading-relaxed">
+        Two AI models trained on <strong class="text-gray-700">19.68M real-world URLs</strong>.
+        Instant results — no signup required.
+      </p>
+    </div>
+
+    <!-- Form -->
+    <form
+      hx-post="/predict"
+      hx-target="#result"
+      hx-swap="innerHTML"
+      hx-indicator="#scan-loading"
+      class="space-y-3"
+    >
+      <div class="flex gap-2">
+        <input
+          name="url"
+          type="text"
+          placeholder="https://example.com/path"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
+          required
+          class="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm font-mono
+                 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none shadow-sm"
+        >
+        <button
+          type="submit"
+          class="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700
+                 active:bg-blue-800 font-semibold text-sm shadow-sm transition-colors whitespace-nowrap"
+        >
+          Scan →
+        </button>
+      </div>
+
+      <!-- Checkboxes -->
+      <div class="flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-gray-600 pl-0.5">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input
+            name="explain"
+            type="checkbox"
+            value="true"
+            class="rounded border-gray-300 text-blue-500 focus:ring-blue-400"
+          >
+          <span>Show explanation <span class="text-gray-400 text-xs">(heatmap + SHAP)</span></span>
+        </label>
+
+        <label
+          class="flex items-center gap-2 cursor-pointer select-none"
+          @click.prevent="showSgdWarning = true"
+        >
+          <input
+            name="enable_sgd"
+            type="checkbox"
+            value="true"
+            :checked="enableSgd"
+            class="rounded border-gray-300 text-orange-500 focus:ring-orange-400"
+            @click.stop
+          >
+          <span>HTML analysis <span class="text-gray-400 text-xs">(slow, optional)</span></span>
+        </label>
+      </div>
+
+      <!-- SGD warning modal (Alpine) -->
+      <div
+        x-show="showSgdWarning"
+        x-transition.opacity
+        class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+        @click.self="showSgdWarning = false"
+      >
+        <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full" @click.stop>
+          <div class="text-base font-semibold text-gray-800 mb-2">⚠️ Enable HTML Analysis?</div>
+          <p class="text-sm text-gray-600 mb-3">
+            This fetches the actual page HTML and classifies its content.
+          </p>
+          <ul class="text-sm text-gray-600 mb-4 space-y-1.5 list-disc list-inside">
+            <li>Adds <strong>1–10 seconds</strong> per scan (network fetch)</li>
+            <li>Many sites are <strong>blocked by Cloudflare</strong> bot protection</li>
+            <li>SGD result is <strong>NOT included</strong> in the ensemble verdict</li>
+          </ul>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-orange-600 transition-colors"
+              @click="enableSgd = true; showSgdWarning = false"
+            >
+              Enable Anyway
+            </button>
+            <button
+              type="button"
+              class="flex-1 border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              @click="showSgdWarning = false"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <!-- Model stat badges -->
+    <div class="flex flex-wrap gap-2">
+      <span class="inline-flex items-center gap-1.5 text-xs bg-blue-50 text-blue-700 rounded-full px-3 py-1 border border-blue-100">
+        <span class="font-semibold">CNN-LSTM</span>
+        <span class="text-blue-400">F1 0.9888 · 1.7 ms</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5 text-xs bg-purple-50 text-purple-700 rounded-full px-3 py-1 border border-purple-100">
+        <span class="font-semibold">XGBoost</span>
+        <span class="text-purple-400">F1 0.9996 · &lt;1 ms</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5 text-xs bg-green-50 text-green-700 rounded-full px-3 py-1 border border-green-100">
+        <span class="font-semibold">Ensemble</span>
+        <span class="text-green-500">thr 0.5</span>
+      </span>
+      <a href="/how-it-works"
+         class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors px-1">
+        How it works →
+      </a>
+    </div>
+
+  </div><!-- /top -->
+
+  <!-- ══ BOTTOM: Result area ══ -->
+  <div>
+
+    <!-- Spinner (shown while HTMX request in flight) -->
+    <div
+      id="scan-loading"
+      class="htmx-indicator flex flex-col items-center justify-center gap-3 py-16 text-gray-400"
+    >
+      <svg class="animate-spin h-9 w-9 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      <span class="text-sm font-medium">Analyzing URL…</span>
+    </div>
+
+    <!-- Result target (HTMX swaps innerHTML) -->
+    <div id="result">
+      <!-- Placeholder: shown until first scan -->
+      <div class="rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center
+                  justify-center min-h-[240px] text-center px-8 py-12">
+        <div class="text-4xl mb-3 select-none opacity-40">🔍</div>
+        <div class="text-base font-semibold text-gray-400 mb-1">Enter a URL to scan</div>
+        <div class="text-sm text-gray-400 mb-5">Results appear here</div>
+        <div class="flex flex-wrap justify-center gap-2 max-w-xl">
+          <span class="text-xs bg-gray-100 text-gray-500 rounded-full px-3 py-1 font-mono">https://google.com</span>
+          <span class="text-xs bg-gray-100 text-gray-500 rounded-full px-3 py-1 font-mono">https://paypa1-secure.tk/verify</span>
+          <span class="text-xs bg-gray-100 text-gray-500 rounded-full px-3 py-1 font-mono">http://192.168.1.1/admin</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /bottom -->
+
+</div>
+{% endblock %}
