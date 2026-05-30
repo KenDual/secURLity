@@ -387,6 +387,8 @@ All predict scripts output a 4-tier risk level from raw probability (independent
 
 8. **SGDClassifier model path corrected**: Model file is at `D:\! secURLity\models\SGDClassifier_2.joblib` (NOT `D:\phreshphish\` as previously documented — the phreshphish dir does not exist). Training scripts still reference the old path if you ever re-train.
 
+9. **httpx streaming + compressed response → DecodingError in `html_fetch.py`**: When using `client.stream()` + `aiter_bytes()`, httpx auto-decompresses gzip/br. Reconstructing `httpx.Response(content=raw, headers=resp.headers)` afterwards re-attempts decompression on already-decoded bytes → `zlib.DecodingError` → caught by `except Exception` → returns `fetch_failed`. Fix: `_is_cloudflare_block()` now takes `(status_code, headers, html_str)` directly — no second `httpx.Response` construction.
+
 ---
 
 ## When making changes

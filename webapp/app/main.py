@@ -30,8 +30,11 @@ _service: Optional[PredictService] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _service
+    print("[startup] Initializing database...", flush=True)
     await db.init_db()
+    print("[startup] Loading models (CNN-LSTM + XGBoost)...", flush=True)
     _service = PredictService(model_dir=config.MODEL_DIR)
+    print("[startup] All models loaded. App ready.", flush=True)
     yield
 
 

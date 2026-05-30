@@ -54,10 +54,10 @@ async def _resolve_and_check(hostname: str) -> bool:
         return False
 
 
-def _is_cloudflare_block(resp: httpx.Response) -> bool:
-    if "Just a moment" in resp.text and "cloudflare" in resp.text.lower():
+def _is_cloudflare_block(status_code: int, headers, html: str) -> bool:
+    if "Just a moment" in html and "cloudflare" in html.lower():
         return True
-    if resp.status_code == 403 and "cf-mitigated" in resp.headers:
+    if status_code == 403 and "cf-mitigated" in headers:
         return True
     return False
 
@@ -111,8 +111,7 @@ async def fetch_html(url: str) -> tuple[Optional[str], float, Optional[str]]:
         except Exception:
             html = raw.decode("latin-1", errors="replace")
 
-        if _is_cloudflare_block(httpx.Response(resp.status_code, content=raw,
-                                                headers=resp.headers)):
+        if _is_cloudflare_block(resp.status_code, resp.headers, html):
             return None, fetch_ms, "cloudflare_blocked"
 
         return html, fetch_ms, None

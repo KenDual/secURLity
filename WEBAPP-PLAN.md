@@ -269,11 +269,11 @@ Mục tiêu: trang đẹp, có heatmap + SHAP chart, SGD toggle hoạt động, 
 
 ## 8. Hugging Face Spaces — deployment notes
 
-- [ ] Tạo HF account (nếu chưa có) tại https://huggingface.co/join
-- [ ] Tạo Space mới: **Docker SDK**, Hardware **CPU basic free**, Visibility **Public**
-- [ ] Clone Space repo về local: `git clone https://huggingface.co/spaces/<username>/securlity`
-- [ ] Copy toàn bộ `webapp/*` vào root repo Space (KHÔNG copy `webapp/` parent folder)
-- [ ] `README.md` ở root Space cần YAML frontmatter:
+- [x] Tạo HF account (nếu chưa có) tại https://huggingface.co/join
+- [x] Tạo Space mới: **Docker SDK**, Hardware **CPU basic free**, Visibility **Public**
+- [x] Clone Space repo về local: `git clone https://huggingface.co/spaces/<username>/securlity`
+- [x] Copy toàn bộ `webapp/*` vào root repo Space (KHÔNG copy `webapp/` parent folder)
+- [x] `README.md` ở root Space cần YAML frontmatter:
   ```yaml
   ---
   title: secURLity
@@ -285,9 +285,9 @@ Mục tiêu: trang đẹp, có heatmap + SHAP chart, SGD toggle hoạt động, 
   pinned: false
   ---
   ```
-- [ ] `git lfs track "*.onnx" "*.ubj" "*.joblib"` (file > 10MB cần Git LFS)
-- [ ] `git add . && git commit -m "Initial deploy" && git push`
-- [ ] Mở Space URL → check build log → verify chạy
+- [x] `git lfs track "*.onnx" "*.ubj" "*.joblib"` (file > 10MB cần Git LFS)
+- [x] `git add . && git commit -m "Initial deploy" && git push`
+- [x] Mở Space URL → check build log → verify chạy
 
 **Caveats HF Spaces free tier:**
 - Ephemeral storage → SQLite reset khi Space restart (hiếm, vài tuần/lần). Phase C có thể snapshot DB sang HF Dataset.
@@ -344,7 +344,7 @@ Mục tiêu: trang đẹp, có heatmap + SHAP chart, SGD toggle hoạt động, 
 - [x] URL có punycode (`https://xn--e1afmapc.com/test`) — không crash ✓
 - [x] URL có ký tự Unicode (`https://例え.jp/test`) — không crash, trả 200 ✓
 - [x] Submit 11 request trong 1 phút — request 11 trả 429 ✓ (seen in error logs)
-- [ ] Toggle SGD + URL hợp lệ — fetch HTML thành công, prob hiện
+- [x] Toggle SGD + URL hợp lệ — fetch HTML thành công, prob hiện (e.g. uef.edu.vn ✓)
 - [ ] Toggle SGD + URL Cloudflare protected — error message clear
 - [x] Toggle SGD + `http://localhost/admin` — SSRF block "ssrf_blocked" ✓
 - [x] Toggle SGD + `http://192.168.1.1/admin` — SSRF block ✓
@@ -371,6 +371,6 @@ Mục tiêu: trang đẹp, có heatmap + SHAP chart, SGD toggle hoạt động, 
 - **Security checklist**: 8 / 9 tasks (còn hCaptcha — Phase C optional)
 - **HF Deployment**: 0 / 8 tasks
 - **Phase C (Optional)**: 0 / 9 tasks
-- **Testing**: 13 / 14 tests passed local (còn mobile responsive — cần browser; benign FP là model limitation không phải bug)
+- **Testing**: 14 / 15 tests passed local (còn mobile responsive — cần browser; benign FP là model limitation không phải bug)
 
 > Update các con số trên mỗi khi check task xong.

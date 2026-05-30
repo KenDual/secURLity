@@ -4,3 +4,8 @@ _pycache_
 dataset/*
 data/processed/*
 .claude
+.CLAUDE.md
+.checklist.md
+.WEPPLAN.md
+.CNN-LSTMD.md
+.PLAN.md
