@@ -49,6 +49,9 @@ Every prediction comes with an explanation. No black boxes. No blind trust.
 
 ---
 
+## Video Demo
+https://youtu.be/C2Do_xzfO6Y
+
 ## Contact
 
 Questions, feedback, or collaboration:
